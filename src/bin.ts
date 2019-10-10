@@ -14,6 +14,7 @@ const run = async (): Promise<void> => {
       strictFunctionTypes: { type: 'boolean', default: true },
       strictPropertyInitialization: { type: 'boolean', default: true },
       noEmit: { type: 'boolean', default: true },
+      ignoreFilesChangedOnBranch: { type: 'array', default: [] },
       targetBranch: { type: 'string', default: 'master' },
     })
     .parserConfiguration({
@@ -27,10 +28,11 @@ const run = async (): Promise<void> => {
       {} as TypeScriptOptions,
     )
 
-  const { targetBranch } = argv
+  const { targetBranch, ignoreFilesChangedOnBranch } = argv
 
   const result = await strictify({
     targetBranch,
+    ignoreFilesChangedOnBranch,
     typeScriptOptions,
     onFoundSinceRevision: (revision) => {
       revision
@@ -43,11 +45,14 @@ const run = async (): Promise<void> => {
             )}. Does target branch ${chalk.bold(targetBranch)} exists?`,
           )
     },
-    onFoundChangedFiles: (changedFiles) => {
+    onFoundChangedFiles: (includedFiles, excludedFiles) => {
+      const numberOfExcludedFiles = excludedFiles.length
+      const numberOfChangedFiles = includedFiles.length + numberOfExcludedFiles
+      const excluded = numberOfExcludedFiles > 0 ? ` (${numberOfExcludedFiles} excluded) ` : ''
       console.log(
-        `🎯  Found ${chalk.bold(String(changedFiles.length))} changed ${
-          changedFiles.length === 1 ? 'file' : 'files'
-        }`,
+        `🎯  Found ${chalk.bold(String(numberOfChangedFiles))} changed ${
+          numberOfChangedFiles === 1 ? 'file' : 'files'
+        }${excluded}`,
       )
     },
     onExamineFile: (file) => {

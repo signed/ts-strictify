@@ -1,15 +1,15 @@
-import simpleGit from 'simple-git/promise'
 import execa from 'execa'
+import simpleGit from 'simple-git/promise'
 
 const isSupportedExtension = (fileName: string): boolean => Boolean(fileName.match(/\.tsx?$/))
 
-const findCommitAtWhichTheCurrentBranchForkedFromTargetBranch = async (
+const findCommitAtWhichBranchForkedFromTargetBranch = (
+  branch: string,
   targetBranch: string,
-): Promise<string | undefined> => {
-  return execa('git', ['merge-base', '--fork-point', targetBranch])
-    .then((resposne) => resposne.stdout)
+): Promise<string | undefined> =>
+  execa('git', ['merge-base', '--fork-point', targetBranch, branch])
+    .then((response) => response.stdout)
     .catch(() => undefined)
-}
 
 const findModifiedAndUntrackedFiles = async (): Promise<string[]> => {
   return simpleGit()
@@ -21,16 +21,20 @@ const findModifiedAndUntrackedFiles = async (): Promise<string[]> => {
     })
 }
 
-const findFilesFromDiffToRevision = async (revision?: string): Promise<string[]> => {
-  return revision
-    ? simpleGit()
-        .diffSummary([revision])
-        .then(({ files }) => files.reduce((result, { file }) => [...result, file], [] as string[]))
-        .catch((e) => {
-          console.error('Can not find files that changed compared to master', e)
-          return []
-        })
-    : []
+const findFilesFromDiffToRevision = async (
+  baseRevision: string | undefined,
+  childRevision: string,
+): Promise<string[]> => {
+  if (baseRevision === undefined) {
+    return []
+  }
+  return simpleGit()
+    .diffSummary([baseRevision, childRevision])
+    .then(({ files }) => files.reduce((result, { file }) => [...result, file], [] as string[]))
+    .catch((e) => {
+      console.error('Can not find files that changed compared to master', e)
+      return []
+    })
 }
 
 const getTypeScriptCompileOutput = async (options: TypeScriptOptions): Promise<string[]> => {
@@ -62,8 +66,9 @@ export interface TypeScriptOptions {
 interface Args {
   typeScriptOptions: TypeScriptOptions
   targetBranch: string
+  ignoreFilesChangedOnBranch: string[]
   onFoundSinceRevision: (revision: string | undefined) => void
-  onFoundChangedFiles: (changedFiles: string[]) => void
+  onFoundChangedFiles: (includedFiles: string[], ignoredFiles: string[]) => void
   onExamineFile: (file: string) => void
   onCheckFile: (file: string, hasErrors: boolean) => void
 }
@@ -80,24 +85,44 @@ export const strictify = async (args: Args): Promise<StrictifyResult> => {
     onCheckFile,
     typeScriptOptions,
     targetBranch,
+    ignoreFilesChangedOnBranch,
   } = args
 
-  const commit = await findCommitAtWhichTheCurrentBranchForkedFromTargetBranch(targetBranch)
+  const commit = await findCommitAtWhichBranchForkedFromTargetBranch('HEAD', targetBranch)
   onFoundSinceRevision(commit)
 
-  const changedFiles = await Promise.all([
-    findModifiedAndUntrackedFiles(),
-    findFilesFromDiffToRevision(commit),
-  ]).then(([a, b]) => Array.from(new Set([...a, ...b])).filter(isSupportedExtension))
-  onFoundChangedFiles(changedFiles)
+  const filesChangedOnOtherBranches = (await Promise.all(
+    ignoreFilesChangedOnBranch.map((branchWithChangesToIgnore) =>
+      findCommitAtWhichBranchForkedFromTargetBranch(branchWithChangesToIgnore, targetBranch).then(
+        (baseCommit) => findFilesFromDiffToRevision(baseCommit, branchWithChangesToIgnore),
+      ),
+    ),
+  )).reduce((accumulator, currentValue) => {
+    return accumulator.concat(currentValue)
+  }, [])
 
-  if (changedFiles.length === 0) {
+  const filesChangedOnHead = await Promise.all([
+    findModifiedAndUntrackedFiles(),
+    findFilesFromDiffToRevision(commit, 'HEAD'),
+  ]).then(([a, b]) => Array.from(new Set([...a, ...b])).filter(isSupportedExtension))
+
+  const [included, excluded] = filesChangedOnHead.reduce<[string[], string[]]>(
+    ([included, excluded], cur) => {
+      const addHere = filesChangedOnOtherBranches.includes(cur) ? excluded : included
+      addHere.push(cur)
+      return [included, excluded]
+    },
+    [[], []],
+  )
+  onFoundChangedFiles(included, excluded)
+
+  if (filesChangedOnHead.length === 0) {
     return { success: true, errors: 0 }
   }
 
   const tscOut = await getTypeScriptCompileOutput(typeScriptOptions)
 
-  const errorCount = changedFiles.reduce<number>((totalErrorCount, fileName) => {
+  const errorCount = included.reduce<number>((totalErrorCount, fileName) => {
     let errorCount = 0
     tscOut.map((line) => {
       if (line.includes(fileName)) {
