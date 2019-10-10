@@ -14,6 +14,7 @@ const run = async (): Promise<void> => {
       strictFunctionTypes: { type: 'boolean', default: true },
       strictPropertyInitialization: { type: 'boolean', default: true },
       noEmit: { type: 'boolean', default: true },
+      ignoreFilesChangedOnBranch: { type: 'array', default: [] },
       targetBranch: { type: 'string', default: 'master' },
     })
     .parserConfiguration({
@@ -27,10 +28,11 @@ const run = async (): Promise<void> => {
       {} as TypeScriptOptions,
     )
 
-  const { targetBranch } = argv
+  const { targetBranch, ignoreFilesChangedOnBranch } = argv
 
   const result = await strictify({
     targetBranch,
+    ignoreFilesChangedOnBranch,
     typeScriptOptions,
     onFoundSinceRevision: (revision) => {
       revision
